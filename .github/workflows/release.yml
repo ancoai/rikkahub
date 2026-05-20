@@ -1,4 +1,4 @@
-name: Release Build
+Name: Release Build
 
 on:
   workflow_dispatch:
@@ -18,6 +18,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # ================= 新增：配置 Node.js 和 pnpm 环境 =================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+          run_install: false
+      # ==================================================================
+
       - name: Gradle cache
         uses: actions/cache@v4
         with:
@@ -28,14 +41,18 @@ jobs:
 
       - name: Prepare build files
         run: |
-          # 解码base64编码的keystore文件
-          echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
+          # 检查 Secrets 是否存在，如果不存在则跳过签名配置，防止空数据导致构建崩溃
+          if [ -n "${{ secrets.KEY_BASE64 }}" ]; then
+            echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
+          fi
           
-          # 写入签名配置到local.properties
-          echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
+          if [ -n "${{ secrets.SIGNING_CONFIG }}" ]; then
+            echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
+          fi
           
-          # 写入Google Services配置
-          echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          fi
 
       - name: Gradle Build
         run: |
