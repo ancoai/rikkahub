@@ -115,22 +115,30 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun listModels(providerSetting: ProviderSetting.Google): List<Model> =
         withContext(Dispatchers.IO) {
-            val url = buildUrl(providerSetting = providerSetting, path = "models?pageSize=100")
-            val request = transformRequest(
-                providerSetting = providerSetting,
-                request = Request.Builder()
-                    .url(url)
-                    .get()
-                    .build()
-            )
-            val response = client.newCall(request).await()
-            if (response.isSuccessful) {
+            val candidatePaths = buildList {
+                add("models?pageSize=100")
+                if (!providerSetting.vertexAI) {
+                    add("v1/models?pageSize=100")
+                }
+            }
+            for (path in candidatePaths) {
+                val url = buildUrl(providerSetting = providerSetting, path = path)
+                val request = transformRequest(
+                    providerSetting = providerSetting,
+                    request = Request.Builder()
+                        .url(url)
+                        .get()
+                        .build()
+                )
+                val response = client.newCall(request).await()
+                if (!response.isSuccessful) continue
+
                 val body = response.body?.string() ?: error("empty body")
-                Log.d(TAG, "listModels: $body")
+                Log.d(TAG, "listModels($path): $body")
                 val bodyObject = json.parseToJsonElement(body).jsonObject
                 val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
 
-                models.mapNotNull {
+                return@withContext models.mapNotNull {
                     val modelObject = it.jsonObject
 
                     // 忽略非chat/embedding模型
@@ -147,9 +155,8 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
                     )
                 }
-            } else {
-                emptyList()
             }
+            emptyList()
         }
 
     override suspend fun generateText(
