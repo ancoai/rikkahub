@@ -65,32 +65,48 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
     override suspend fun listModels(providerSetting: ProviderSetting.Claude): List<Model> =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url("${providerSetting.baseUrl}/models")
-                .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
-                .addHeader("anthropic-version", ANTHROPIC_VERSION)
-                .get()
-                .build()
+            val normalizedBaseUrl = providerSetting.baseUrl.trimEnd('/')
+            val candidateUrls = buildList {
+                add("$normalizedBaseUrl/models")
+                add("$normalizedBaseUrl/model")
+                if (!normalizedBaseUrl.endsWith("/v1")) {
+                    add("$normalizedBaseUrl/v1/models")
+                    add("$normalizedBaseUrl/v1/model")
+                }
+            }.distinct()
+            val apiKey = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
 
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                error("Failed to get models: ${response.code} ${response.body?.string()}")
+            var lastError: String? = null
+            for (url in candidateUrls) {
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("x-api-key", apiKey)
+                    .addHeader("anthropic-version", ANTHROPIC_VERSION)
+                    .get()
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    lastError = "Failed to get models from $url: ${response.code} ${response.body?.string()}"
+                    continue
+                }
+
+                val bodyStr = response.body?.string() ?: ""
+                val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
+                val data = bodyJson["data"]?.jsonArray ?: return@withContext emptyList()
+
+                return@withContext data.mapNotNull { modelJson ->
+                    val modelObj = modelJson.jsonObject
+                    val id = modelObj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    val displayName = modelObj["display_name"]?.jsonPrimitive?.contentOrNull ?: id
+
+                    Model(
+                        modelId = id,
+                        displayName = displayName,
+                    )
+                }
             }
-
-            val bodyStr = response.body?.string() ?: ""
-            val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
-            val data = bodyJson["data"]?.jsonArray ?: return@withContext emptyList()
-
-            data.mapNotNull { modelJson ->
-                val modelObj = modelJson.jsonObject
-                val id = modelObj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                val displayName = modelObj["display_name"]?.jsonPrimitive?.contentOrNull ?: id
-
-                Model(
-                    modelId = id,
-                    displayName = displayName,
-                )
-            }
+            error(lastError ?: "Failed to get models from all known endpoints")
         }
 
     override suspend fun generateImage(
